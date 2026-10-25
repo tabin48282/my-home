@@ -1,5 +1,5 @@
 // 앱 파일만 캐시한다(오프라인 실행용). 거래 데이터는 localStorage에 있고 여기서 다루지 않는다.
-const CACHE = "ledger-v2";
+const CACHE = "ledger-v3";
 const FILES = ["./", "index.html", "style.css", "logic.js", "app.js", "manifest.json", "icon.svg", "icon-192.png", "icon-512.png", "icon-180.png"];
 
 self.addEventListener("install", (e) => {
