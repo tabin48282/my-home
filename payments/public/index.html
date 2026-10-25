@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GLINK 결제</title>
+  <script src="https://js.tosspayments.com/v2/standard"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 16px; }
+    #pay { width: 100%; padding: 14px; font-size: 16px; border: 0; border-radius: 8px; background: #3182f6; color: #fff; cursor: pointer; }
+    #pay:disabled { background: #b0b8c1; cursor: default; }
+  </style>
+</head>
+<body>
+  <h1>주문 결제</h1>
+  <p id="summary">주문 정보를 불러오는 중…</p>
+  <div id="payment-method"></div>
+  <div id="agreement"></div>
+  <button id="pay" disabled>결제하기</button>
+  <script src="checkout.js"></script>
+</body>
+</html>

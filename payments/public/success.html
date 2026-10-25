@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>결제 확인</title>
+  <style>body { font-family: system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 16px; }</style>
+</head>
+<body>
+  <h1 id="title">결제를 확인하는 중…</h1>
+  <p id="detail"></p>
+  <script>
+    (async () => {
+      const q = new URLSearchParams(location.search);
+      const title = document.getElementById("title");
+      const detail = document.getElementById("detail");
+      const res = await fetch("/api/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentKey: q.get("paymentKey"),
+          orderId: q.get("orderId"),
+          amount: q.get("amount"),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        title.textContent = "결제 승인에 실패했습니다.";
+        detail.textContent = `${body.message} (${body.code || res.status})`;
+        return;
+      }
+      title.textContent = "결제가 완료되었습니다.";
+      detail.textContent = `주문번호 ${body.orderId} / ${body.totalAmount.toLocaleString()}원`;
+    })();
+  </script>
+</body>
+</html>
