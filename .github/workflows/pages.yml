@@ -1,0 +1,33 @@
+# ledger/ 폴더(가계부 웹앱)를 GitHub Pages에 배포한다.
+# 저장소 Settings > Pages > Source 를 "GitHub Actions"로 설정해야 동작한다.
+name: Deploy ledger to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["ledger/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ledger
+      - id: deployment
+        uses: actions/deploy-pages@v4
