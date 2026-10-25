@@ -2,7 +2,15 @@
 
 카드·통장 이체·주식 투자를 한곳에서 기록하는 가계부입니다. 서버 없이 동작하고 모든 데이터는 **사용 중인 브라우저의 localStorage에만** 저장됩니다. 외부로 전송하지 않습니다.
 
-## 실행
+## 휴대폰에 설치 (GitHub Pages)
+1. GitHub 저장소 **Settings > Pages > Build and deployment > Source**를 **GitHub Actions**로 바꿉니다. (한 번만)
+2. `main`에 `ledger/` 변경이 반영되면 `.github/workflows/pages.yml`이 자동으로 배포합니다. Actions 탭에서 수동 실행(Run workflow)도 됩니다.
+3. 휴대폰에서 `https://tabin48282.github.io/my-home/`을 엽니다.
+   - Android(Chrome): 메뉴 ⋮ > **홈 화면에 추가**(또는 앱 설치)
+   - iPhone(Safari): 공유 버튼 > **홈 화면에 추가**
+4. 한 번 열고 나면 인터넷이 없어도 실행됩니다. 앱을 고친 뒤에는 인터넷이 연결된 상태로 한 번 열어야 새 버전이 받아집니다.
+
+## 실행 (PC에서 확인)
 ```bash
 cd ledger
 python3 -m http.server 8000    # 또는 어떤 정적 서버든 가능
