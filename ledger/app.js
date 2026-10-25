@@ -1027,6 +1027,8 @@
       try { await dlApi.save({ filename: name, data: text }); return true; }
       catch (e) { if (e && e.code === "declined") return false; toast("파일 저장을 할 수 없습니다. '텍스트 복사'를 사용하세요."); return false; }
     }
+    // claude.ai 화면 안에서는 링크 다운로드가 막혀 있어 저장된 것처럼 보이지 않게 한다
+    if (window.claude) { toast("이 화면에서는 파일 저장이 막혀 있습니다. '텍스트 복사'를 사용하세요."); return false; }
     const blob = new Blob([text], { type });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
