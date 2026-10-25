@@ -94,8 +94,9 @@
 
   // 카드대금처럼 계좌 간 이동이라 지출로 세면 안 되는 거래를 이체로 분류하는 기본 규칙에 사용
   function applyRules(t, rules) {
-    // 수입에는 type이 "income"이거나 이체 전환(toType) 규칙만 적용해 지출용 분류가 붙지 않게 한다
-    const usable = (rules || []).filter((r) => t.type !== "income" || r.type === "income" || r.toType);
+    // 수입에는 type이 "income"이거나 이체 전환 규칙만 적용해 지출·저축용 분류가 붙지 않게 한다
+    // (예: '적금 만기' 입금이 '적금 → 저축' 규칙에 걸려 저축으로 바뀌지 않도록)
+    const usable = (rules || []).filter((r) => t.type !== "income" || r.type === "income" || r.toType === "transfer");
     const r = categorize(t.memo, t.type, usable);
     if (r) {
       if (r.toType) t.type = r.toType;
@@ -270,7 +271,150 @@
     return { income, expense, byCat, byAcc };
   }
 
-  const api = { parseAmount, normDate, parseCSV, detectColumns, findHeaderRow, categorize, applyRules, dedupeKey, rowsToTx, parseSms, splitSms, computeHoldings, summarize, filterNew, guessAccount, monthlyTrend };
+  // ---------- 월 결산 ----------
+  // meta: { expense: {분류: {group: 'fixed'|'variable'}}, saving: {분류: {group: 'save'|'invest'|'repay'}} }
+  function settle(tx, ym, meta) {
+    const em = (meta && meta.expense) || {}, sm = (meta && meta.saving) || {};
+    const r = { income: 0, fixed: 0, variable: 0, save: 0, invest: 0, repay: 0, transfer: 0, byCat: {}, byIncome: {}, bySaving: {}, byAcc: {} };
+    for (const t of tx) {
+      if (!inMonth(t.date, ym)) continue;
+      if (t.type === "income") { r.income += t.amount; r.byIncome[t.category] = (r.byIncome[t.category] || 0) + t.amount; }
+      else if (t.type === "expense") {
+        if ((em[t.category] || {}).group === "fixed") r.fixed += t.amount; else r.variable += t.amount;
+        r.byCat[t.category] = (r.byCat[t.category] || 0) + t.amount;
+        r.byAcc[t.accountId] = (r.byAcc[t.accountId] || 0) + t.amount;
+      } else if (t.type === "saving") {
+        const g = (sm[t.category] || {}).group;
+        r[g === "invest" || g === "repay" ? g : "save"] += t.amount;
+        r.bySaving[t.category] = (r.bySaving[t.category] || 0) + t.amount;
+      } else if (t.type === "transfer") r.transfer += t.amount;
+    }
+    r.consume = r.fixed + r.variable;
+    r.saveAll = r.save + r.invest + r.repay;
+    r.left = r.income - r.consume - r.saveAll; // 잔여자금 = 총수입 - 실제 현금 유출(소비 + 저축·투자·추가상환)
+    r.consumeRate = r.income > 0 ? r.consume / r.income : null;
+    r.saveRate = r.income > 0 ? r.saveAll / r.income : null;
+    return r;
+  }
+
+  function prevYm(ym, k) {
+    let [y, m] = ym.split("-").map(Number);
+    m -= k == null ? 1 : k;
+    while (m < 1) { m += 12; y--; }
+    while (m > 12) { m -= 12; y++; }
+    return `${y}-${pad(m)}`;
+  }
+  const monthsBetween = (a, b) => { const [y1, m1] = a.split("-").map(Number), [y2, m2] = b.split("-").map(Number); return (y2 - y1) * 12 + (m2 - m1); };
+
+  // 분류별 이번 달 vs 지난달 (환불로 음수인 경우도 그대로 비교)
+  function compareMonths(tx, ym, type) {
+    const cur = {}, prev = {}, pym = prevYm(ym);
+    for (const t of tx) {
+      if (t.type !== (type || "expense")) continue;
+      const k = t.date.slice(0, 7);
+      if (k === ym) cur[t.category] = (cur[t.category] || 0) + t.amount;
+      else if (k === pym) prev[t.category] = (prev[t.category] || 0) + t.amount;
+    }
+    return [...new Set([...Object.keys(cur), ...Object.keys(prev)])].map((c) => {
+      const a = cur[c] || 0, b = prev[c] || 0;
+      return { cat: c, cur: a, prev: b, diff: a - b, rate: b > 0 ? (a - b) / b : null };
+    }).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+  }
+
+  // ---------- 저축 목표 ----------
+  // goal: {year, target, cats: []} cats가 비어 있으면 저축·투자 전체
+  function goalProgress(tx, goal, today) {
+    const y = String(goal.year);
+    const cats = goal.cats && goal.cats.length ? new Set(goal.cats) : null;
+    let done = 0;
+    for (const t of tx) if (t.type === "saving" && t.date.slice(0, 4) === y && (!cats || cats.has(t.category))) done += t.amount;
+    const target = Number(goal.target) || 0;
+    const remain = Math.max(0, target - done);
+    const ty = Number(today.slice(0, 4)), tm = Number(today.slice(5, 7));
+    // 남은 달 수: 올해 목표면 이번 달 포함, 미래 연도면 12개월, 지난 연도면 0
+    const monthsLeft = Number(y) > ty ? 12 : Number(y) === ty ? 13 - tm : 0;
+    return { done, target, remain, rate: target > 0 ? done / target : null, monthsLeft, perMonth: monthsLeft > 0 ? remain / monthsLeft : null };
+  }
+
+  // ---------- 대출 ----------
+  // 원리금균등 월 상환액
+  function annuityPayment(balance, annualRate, months) {
+    if (!(months > 0)) return 0;
+    const r = annualRate / 100 / 12;
+    if (r === 0) return balance / months;
+    return (balance * r) / (1 - Math.pow(1 + r, -months));
+  }
+
+  // 상환 기록을 날짜순으로 이어서 전월 잔액·월말 잔액을 계산한다
+  function loanLedger(loan, recs) {
+    let bal = Number(loan.balance0) || 0;
+    const rows = recs.filter((r) => r.loanId === loan.id).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((r) => {
+      const prev = bal;
+      bal = Math.max(0, prev - (Number(r.principal) || 0) - (Number(r.extra) || 0));
+      return { ...r, prev, end: bal };
+    });
+    return { rows, balance: bal };
+  }
+  // ym 월말 기준 잔액 (순자산 자동 채우기용)
+  function loanBalanceAt(loan, recs, ym) {
+    const { rows } = loanLedger(loan, recs);
+    let bal = Number(loan.balance0) || 0;
+    for (const r of rows) if (r.date.slice(0, 7) <= ym) bal = r.end;
+    return bal;
+  }
+
+  // method: 'annuity'(원리금균등, 월 상환액 고정) | 'equal'(원금균등, 월 원금 고정) | 'bullet'(만기일시, 이자만 납부)
+  // 추가 상환액은 매달 정기 상환과 별도로 원금에 바로 넣는다고 가정한다.
+  function simulateLoan(o) {
+    const r = (Number(o.rate) || 0) / 100 / 12;
+    let bal = Number(o.balance) || 0;
+    const months = Math.max(1, Math.round(Number(o.months) || 1));
+    const extra = Math.max(0, Number(o.extra) || 0);
+    const pay = Number(o.payment) > 0 ? Number(o.payment) : annuityPayment(bal, o.rate, months);
+    const part = bal / months;
+    let n = 0, interest = 0;
+    while (bal > 0.5 && n < 1200) {
+      n++;
+      const it = bal * r;
+      let p;
+      if (o.method === "equal") p = part;
+      else if (o.method === "bullet") p = n >= months ? bal : 0;
+      else p = pay - it;
+      p = Math.min(bal, Math.max(0, p) + extra);
+      if (p <= 0 && o.method !== "bullet") return { months: null, interest: null, payment: pay }; // 이자도 못 갚는 상환액
+      interest += it;
+      bal -= p;
+    }
+    if (bal > 0.5) return { months: null, interest: null, payment: pay };
+    return { months: n, interest, payment: pay };
+  }
+
+  // 목표 개월 수 안에 끝내려면 매달 얼마를 추가로 갚아야 하는지 (이분 탐색, 1원 단위)
+  function requiredExtra(o, targetMonths) {
+    if (!(targetMonths > 0)) return null;
+    const base = simulateLoan({ ...o, extra: 0 });
+    if (base.months != null && base.months <= targetMonths) return 0;
+    let lo = 0, hi = Number(o.balance) || 0;
+    for (let i = 0; i < 60 && hi - lo > 1; i++) {
+      const mid = (lo + hi) / 2;
+      const s = simulateLoan({ ...o, extra: mid });
+      if (s.months != null && s.months <= targetMonths) hi = mid; else lo = mid;
+    }
+    return Math.ceil(hi);
+  }
+
+  // ---------- 순자산 ----------
+  // items: [{id, side:'asset'|'debt'}], values: {id: 금액}
+  function netWorth(items, values) {
+    let asset = 0, debt = 0;
+    for (const it of items) {
+      const v = Number((values || {})[it.id]) || 0;
+      if (it.side === "debt") debt += v; else asset += v;
+    }
+    return { asset, debt, net: asset - debt };
+  }
+
+  const api = { settle, prevYm, monthsBetween, compareMonths, goalProgress, annuityPayment, loanLedger, loanBalanceAt, simulateLoan, requiredExtra, netWorth, parseAmount, normDate, parseCSV, detectColumns, findHeaderRow, categorize, applyRules, dedupeKey, rowsToTx, parseSms, splitSms, computeHoldings, summarize, filterNew, guessAccount, monthlyTrend };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Logic = api;
 })(typeof window !== "undefined" ? window : globalThis);
