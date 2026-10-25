@@ -254,6 +254,21 @@
   // ---------- 시트(모달) ----------
   function openSheet(html) { $("#sheet").innerHTML = html; $("#overlay").hidden = false; }
   function closeSheet() { $("#overlay").hidden = true; $("#sheet").innerHTML = ""; }
+  function ask(msg, okLabel) {
+    return new Promise((resolve) => {
+      openSheet(`<h3>확인</h3><p>${esc(msg)}</p><div class="btns"><button class="btn" id="ask-no">취소</button><button class="btn primary" id="ask-yes">${esc(okLabel || "확인")}</button></div>`);
+      $("#ask-no").onclick = () => { closeSheet(); resolve(false); };
+      $("#ask-yes").onclick = () => { closeSheet(); resolve(true); };
+    });
+  }
+  function askText(title, placeholder) {
+    return new Promise((resolve) => {
+      openSheet(`<h3>${esc(title)}</h3><input id="ask-in" placeholder="${esc(placeholder || "")}"><div class="btns"><button class="btn" id="ask-no">취소</button><button class="btn primary" id="ask-yes">확인</button></div>`);
+      $("#ask-in").focus();
+      $("#ask-no").onclick = () => { closeSheet(); resolve(null); };
+      $("#ask-yes").onclick = () => { const v = $("#ask-in").value.trim(); closeSheet(); resolve(v || null); };
+    });
+  }
   const segHtml = (id, items, sel) => `<div class="seg" id="${id}">${items.map(([k, v]) => `<button type="button" data-v="${k}" class="${sel === k ? "on" : ""}">${v}</button>`).join("")}</div>`;
   const bindSeg = (id, cb) => {
     $("#" + id).onclick = (e) => {
@@ -335,10 +350,10 @@
       if (i >= 0) state.accounts[i] = next; else state.accounts.push(next);
       save(); closeSheet(); render(); toast("저장했습니다.");
     };
-    if (!isNew) $("#ac-del").onclick = () => {
+    if (!isNew) $("#ac-del").onclick = async () => {
       if (!others.length) return toast("카드·계좌가 최소 1개는 필요합니다.");
       const to = count ? $("#ac-move").value : null;
-      if (!confirm(count ? `내역 ${count}건을 '${accName(to)}'(으)로 옮기고 삭제할까요?` : "삭제할까요?")) return;
+      if (!(await ask(count ? `내역 ${count}건을 '${accName(to)}'(으)로 옮기고 '${a.name}'을(를) 삭제할까요?` : `'${a.name}'을(를) 삭제할까요?`, "삭제"))) return;
       if (to) state.tx.forEach((t) => { if (t.accountId === a.id) t.accountId = to; });
       state.accounts = others;
       if (ui.fAcc === a.id) ui.fAcc = "";
@@ -528,32 +543,66 @@
   }
 
   // ---------- 내보내기·백업 ----------
-  function download(name, text, type) {
+  // claude.ai 페이지에서는 downloads 기능으로, 일반 브라우저에서는 링크로 저장한다
+  let dlApi;
+  async function download(name, text, type) {
+    if (dlApi === undefined) {
+      try { dlApi = window.claude && window.claude.use ? await window.claude.use("downloads") : null; } catch (e) { dlApi = null; }
+    }
+    if (dlApi) {
+      try { await dlApi.save({ filename: name, data: text }); return true; }
+      catch (e) { if (e && e.code === "declined") return false; toast("파일 저장을 할 수 없습니다. '텍스트 복사'를 사용하세요."); return false; }
+    }
     const blob = new Blob([text], { type });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    return true;
+  }
+  function exportSheet(title, hint, name, text, type, onDone) {
+    openSheet(`<h3>${esc(title)}</h3><div class="hint">${esc(hint)}</div>
+      <div class="btns"><button class="btn primary" id="ex-file">파일로 저장</button><button class="btn" id="ex-copy">텍스트 복사</button></div>
+      <textarea id="ex-text" readonly>${esc(text)}</textarea>
+      <div class="hint">파일 저장이 되지 않는 환경에서는 '텍스트 복사' 후 메모장·메일 등에 붙여 넣어 보관하세요.</div>
+      <div class="btns"><button class="btn" id="ex-close">닫기</button></div>`);
+    $("#ex-file").onclick = async () => { if (await download(name, text, type)) { if (onDone) onDone(); toast("파일을 저장했습니다."); } };
+    $("#ex-copy").onclick = () => {
+      const done = () => { if (onDone) onDone(); toast("복사했습니다."); };
+      const fallback = () => { const ta = $("#ex-text"); ta.focus(); ta.select(); toast("텍스트를 선택했습니다. 길게 눌러 복사하세요."); };
+      try { navigator.clipboard.writeText(text).then(done, fallback); } catch (e) { fallback(); }
+    };
+    $("#ex-close").onclick = () => { closeSheet(); render(); };
   }
   function exportBackup() {
-    download(`ledger-backup-${todayStr()}.json`, JSON.stringify(state, null, 1), "application/json");
-    state.settings.lastBackup = new Date().toISOString();
-    save(); render();
+    exportSheet("백업", `내역 ${state.tx.length}건, 투자 기록 ${state.trades.length}건을 백업합니다.`, `ledger-backup-${todayStr()}.json`, JSON.stringify(state), "application/json",
+      () => { state.settings.lastBackup = new Date().toISOString(); save(); });
   }
   function exportCsv() {
     // 엑셀에서 수식으로 실행되지 않도록 = + - @ 로 시작하는 문자열 앞에 ' 를 붙인다
     const cell = (v) => { let s = String(v == null ? "" : v); if (/^[=+\-@]/.test(s) && typeof v === "string") s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
     const rows = [["날짜", "구분", "금액", "카드·계좌", "분류", "가맹점·메모"]];
     [...state.tx].sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((t) => rows.push([t.date, TYPE_LABEL[t.type], t.amount, accName(t.accountId), t.category, t.memo]));
-    download(`ledger-${todayStr()}.csv`, "﻿" + rows.map((r) => r.map(cell).join(",")).join("\r\n"), "text/csv");
+    const csv = rows.map((r) => r.map(cell).join(",")).join("\r\n");
+    exportSheet("내역 CSV", "엑셀에서 열 수 있는 CSV입니다.", `ledger-${todayStr()}.csv`, "\uFEFF" + csv, "text/csv");
   }
-  async function restoreBackup(file) {
+  function restoreSheet() {
+    openSheet(`<h3>백업 불러오기</h3><div class="hint">백업 파일을 고르거나, 복사해 둔 백업 텍스트를 붙여 넣으세요.</div>
+      <div class="btns"><button class="btn" id="rs-file">백업 파일 고르기</button></div>
+      <textarea id="rs-text" placeholder="백업 텍스트 붙여넣기"></textarea>
+      <div class="btns"><button class="btn" id="rs-cancel">취소</button><button class="btn primary" id="rs-ok">불러오기</button></div>`);
+    $("#rs-file").onclick = () => $("#restore-file") ? $("#restore-file").click() : null;
+    $("#rs-cancel").onclick = closeSheet;
+    $("#rs-ok").onclick = () => restoreBackup($("#rs-text").value);
+  }
+  async function restoreBackup(text) {
     try {
-      const s = JSON.parse(await file.text());
+      const s = JSON.parse(text);
       if (!Array.isArray(s.tx) || !Array.isArray(s.accounts) || !Array.isArray(s.trades)) throw new Error("형식 오류");
-      if (!confirm(`현재 데이터를 지우고 백업(내역 ${s.tx.length}건, 투자 ${s.trades.length}건)으로 교체할까요?`)) return;
+      if (!(await ask(`현재 데이터를 지우고 백업(내역 ${s.tx.length}건, 투자 ${s.trades.length}건)으로 교체할까요?`, "교체"))) return;
       state = normalize(s);
+      state.settings.lastBackup = new Date().toISOString(); // 방금 복원한 내용은 백업본에 이미 있음
       save(); render(); toast("복원했습니다.");
     } catch (e) { toast("백업 파일을 읽지 못했습니다."); }
   }
@@ -566,7 +615,7 @@
   }
   const goList = (patch) => { Object.assign(ui, { fAcc: "", fType: "", fCat: "", q: "" }, patch); ui.tab = "list"; render(); };
 
-  document.addEventListener("click", (e) => {
+  document.addEventListener("click", async (e) => {
     const T = e.target;
     const tab = T.closest("#tabs button");
     if (tab) { ui.tab = tab.dataset.tab; return render(); }
@@ -583,14 +632,14 @@
     if ((el = pick("[data-undo]"))) {
       const b = state.batches.find((x) => x.id === el.dataset.undo);
       const n = state.tx.filter((t) => t.batch === b.id).length;
-      if (!confirm(`'${b.label}'로 가져온 내역 ${n}건을 삭제할까요?`)) return;
+      if (!(await ask(`'${b.label}'로 가져온 내역 ${n}건을 삭제할까요?`, "삭제"))) return;
       state.tx = state.tx.filter((t) => t.batch !== b.id);
       state.batches = state.batches.filter((x) => x.id !== b.id);
       save(); render(); return toast(`${n}건을 삭제했습니다.`);
     }
     if ((el = pick("[data-add-cat]"))) {
       const type = el.dataset.addCat;
-      const n = (prompt(`새 ${TYPE_LABEL[type]} 분류 이름`) || "").trim();
+      const n = (await askText(`새 ${TYPE_LABEL[type]} 분류`, "예: 반려동물")) || "";
       if (n && !state.categories[type].includes(n)) { state.categories[type].push(n); save(); render(); }
       return;
     }
@@ -610,9 +659,9 @@
       case "add-rule": return ruleForm();
       case "export": return exportBackup();
       case "export-csv": return exportCsv();
-      case "restore": return $("#restore-file").click();
+      case "restore": return restoreSheet();
       case "wipe":
-        if (confirm("모든 내역과 투자 기록을 삭제합니다. 되돌릴 수 없습니다. 계속할까요?") && confirm("정말 삭제할까요? 먼저 백업 파일을 저장해 두는 것을 권장합니다.")) {
+        if (await ask("모든 내역과 투자 기록을 삭제합니다. 되돌릴 수 없습니다. 먼저 백업해 두는 것을 권장합니다.", "모두 삭제")) {
           state = DEFAULT_STATE(); save(); render(); toast("삭제했습니다.");
         }
     }
@@ -639,7 +688,7 @@
         importSheet(rows, f.name);
       } catch (err) { toast(err.message || "파일을 읽지 못했습니다."); }
     }
-    if (t.id === "restore-file" && t.files[0]) { const f = t.files[0]; t.value = ""; restoreBackup(f); }
+    if (t.id === "restore-file" && t.files[0]) { const f = t.files[0]; t.value = ""; restoreBackup(await f.text()); }
   });
   // 검색은 결과 영역만 다시 그린다(입력창을 다시 만들면 한글 조합이 끊김)
   document.addEventListener("input", (e) => {
