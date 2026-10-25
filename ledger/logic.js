@@ -108,6 +108,49 @@
     return [t.date, t.accountId, Math.round(Math.abs(t.amount) * 100), String(t.memo || "").replace(/\s/g, "")].join("|");
   }
 
+  // 같은 날 같은 가맹점에서 같은 금액을 두 번 쓴 경우도 있으므로 "횟수"로 비교한다.
+  // 기존에 같은 키가 n건 있으면, 새 목록에서 같은 키의 n+1번째부터만 새 거래로 본다.
+  function filterNew(existing, incoming) {
+    const have = new Map();
+    for (const t of existing) { const k = dedupeKey(t); have.set(k, (have.get(k) || 0) + 1); }
+    const seen = new Map(), fresh = [];
+    for (const t of incoming) {
+      const k = dedupeKey(t);
+      const n = (seen.get(k) || 0) + 1;
+      seen.set(k, n);
+      if (n > (have.get(k) || 0)) fresh.push(t);
+    }
+    return fresh;
+  }
+
+  // 1순위: 카드번호 끝 4자리, 2순위: 계정 이름이 가장 길게 일치하는 것, 3순위: 카드사·은행 이름 앞 2글자
+  function guessAccount(text, accounts) {
+    const t = String(text || "").replace(/\s/g, "");
+    const digits = new Set((t.match(/\d{4}(?!\d)/g) || []));
+    const byLast4 = accounts.filter((a) => a.last4 && digits.has(a.last4));
+    if (byLast4.length === 1) return byLast4[0].id;
+    const pool = byLast4.length ? byLast4 : accounts;
+    let best = null, bestLen = 0;
+    for (const a of pool) {
+      const name = a.name.replace(/\s/g, "");
+      if (name && t.includes(name) && name.length > bestLen) { best = a; bestLen = name.length; }
+    }
+    if (best) return best.id;
+    const pre = pool.find((a) => a.name.replace(/\s/g, "").length >= 2 && t.includes(a.name.replace(/\s/g, "").slice(0, 2)));
+    return pre ? pre.id : null;
+  }
+
+  function monthlyTrend(tx, ym, n) {
+    let [y, m] = ym.split("-").map(Number);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const key = `${y}-${pad(m)}`;
+      out.unshift({ ym: key, ...summarize(tx, key) });
+      m--; if (m < 1) { m = 12; y--; }
+    }
+    return out;
+  }
+
   // mapping: {date, memo, amount, out, in} (열 인덱스, 없으면 -1)
   // signMode: 'expense' 금액 열의 양수=지출(음수=취소/환불), 'signed' 음수=지출·양수=수입
   function rowsToTx(rows, mapping, opts) {
@@ -148,7 +191,9 @@
 
     function mk(a) {
       const d = body.match(/(\d{1,2})\/(\d{1,2})/) || body.match(/(\d{1,2})월\s*(\d{1,2})일/);
-      const date = d ? normDate(`${d[1]}/${d[2]}`, defaultYear) : today;
+      let date = d ? normDate(`${d[1]}/${d[2]}`, defaultYear) : today;
+      // 12/31 문자를 1월에 붙여 넣는 경우처럼 오늘보다 미래면 전년도로 본다
+      if (date && today && date > today) date = normDate(`${d[1]}/${d[2]}`, defaultYear - 1);
       const lines = body.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       let memo = "";
       const tm = body.match(/\d{1,2}:\d{2}(?::\d{2})?\s+(.+)/);
@@ -157,7 +202,8 @@
         memo = [...lines].reverse().find((l) => !/누적|잔액|한도|승인|입금|출금|원/.test(l)) || "";
       }
       memo = memo.replace(/(누적|잔액).*$/, "").trim();
-      return { date: date || today, type, amount: a, memo, raw: body };
+      const card = body.match(/[(*](\d{4})\)?/);
+      return { date: date || today, type, amount: a, memo, last4: card ? card[1] : null, raw: body };
     }
   }
 
@@ -224,7 +270,7 @@
     return { income, expense, byCat, byAcc };
   }
 
-  const api = { parseAmount, normDate, parseCSV, detectColumns, findHeaderRow, categorize, applyRules, dedupeKey, rowsToTx, parseSms, splitSms, computeHoldings, summarize };
+  const api = { parseAmount, normDate, parseCSV, detectColumns, findHeaderRow, categorize, applyRules, dedupeKey, rowsToTx, parseSms, splitSms, computeHoldings, summarize, filterNew, guessAccount, monthlyTrend };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Logic = api;
 })(typeof window !== "undefined" ? window : globalThis);

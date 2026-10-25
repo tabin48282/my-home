@@ -65,3 +65,13 @@ table.pv td, table.pv th { padding: 4px 6px; border-bottom: 1px solid var(--line
 .sms-item { border-bottom: 1px solid var(--line); padding: 10px 0; }
 .sms-item .raw { font-size: 11px; color: var(--sub); white-space: pre-wrap; margin-bottom: 6px; }
 .sms-item .two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.tap { cursor: pointer; }
+.card.warn { background: #fff3cd; color: #664d03; font-size: 14px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .card.warn { background: #3a3220; color: #f5d78a; } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip.lg { font-size: 13px; padding: 4px 6px 4px 10px; margin: 0; border-radius: 14px; color: var(--text); display: inline-flex; align-items: center; gap: 2px; }
+.chip.lg button { border: 0; background: none; color: var(--sub); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.chip.add { border: 1px dashed var(--sub); background: none; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+label.check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-top: 12px; }
+label.check input { width: auto; }
+button.btn.sm { width: auto; padding: 4px 10px; font-size: 13px; }
